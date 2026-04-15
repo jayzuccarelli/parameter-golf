@@ -30,14 +30,16 @@ def setup_data(train_shards: int = 10):
     vol.commit()
     print("Done.")
 
-@app.function(image=image, gpu="A100-80GB", volumes={"/data": vol}, timeout=1200, memory=32768)
+@app.function(image=image, gpu="A10G", volumes={"/data": vol}, timeout=2400, memory=32768)
 def run_experiment(code: str) -> str:
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
     tmp.write(code); tmp.flush()
     env = {**os.environ, "MAX_WALLCLOCK_SECONDS": "300",
            "DATA_PATH": "/data/datasets/fineweb10B_sp1024",
-           "TOKENIZER_PATH": "/data/tokenizers/fineweb_1024_bpe.model"}
-    r = subprocess.run([sys.executable, tmp.name], capture_output=True, text=True, env=env, timeout=1200)
+           "TOKENIZER_PATH": "/data/tokenizers/fineweb_1024_bpe.model",
+           "ZSTD_LEVEL": "9",
+           "EVAL_STRIDE": "256"}
+    r = subprocess.run([sys.executable, tmp.name], capture_output=True, text=True, env=env, timeout=2400)
     return r.stdout + r.stderr
 
 @app.local_entrypoint()
