@@ -81,7 +81,7 @@ We'd love to see weird & creative ideas in the challenge, since you never know w
 
 If you have an Apple laptop or desktop with Apple Silicon, we've set up a simple MLX training script to help you start iterating locally.
 
-If you don't have a Mac with Apple Silicon, you can run an adapted version of this script without MLX support. Just ask [Codex](https://openai.com/codex/) to refactor it; the change is straightforward. It may still be fairly slow, so we recommend jumping straight to cloud GPUs with Runpod.
+If you don't have a Mac with Apple Silicon, you can run an adapted version of this script without MLX support. Just ask [Codex](https://openai.com/codex/) to refactor it; the change is straightforward. It may still be fairly slow, so we recommend jumping straight to cloud GPUs with Modal.
 
 First, clone the repository, create a fresh Python environment, and install the packages needed for the MLX path plus dataset download:
 
@@ -120,22 +120,29 @@ Validation always runs on the full `fineweb_val_*` split, which is the fixed fir
 
 Once you're happy with your local tests, or you want more compute, switch to a remote CUDA machine.
 
-You can rent GPUs from anywhere, but OpenAI is partnering with Runpod to make setup as easy as possible.  
+You can rent GPUs from anywhere. We recommend [Modal](https://modal.com), which lets you launch an interactive GPU shell with minimal setup.
 
-#### Launching a 1xH100 Pod
+#### Launching a 1xH100 Shell
 
-1. First, [create a Runpod account](https://console.runpod.io/deploy). You should also set up an SSH key in the Settings tab on the left so you can connect to your remote machine. If you're new to this, ask Codex to help you set it up.
-
-2. Once you've set up your account, create a new GPU Cloud Pod. You can choose whichever GPU SKU you'd like. Final leaderboard submissions must run in under 10 minutes on 8xH100s (specifically the SXM variant), but we strongly recommend testing and running experiments on cheaper SKUs first, since an 8xH100 box can cost around $20/hour.
-
-3. Let's start with a 1xH100 pod. Deploy using the official Parameter Golf template: [Launch Template](https://console.runpod.io/deploy?template=y5cejece4j&ref=nl2r56th). Enable SSH terminal access, leaving the other settings at their defaults. Deploy your pod and SSH into it once it's up. You should land in `/workspace/`.
-
-On your remote machine, clone the repo onto local disk. All Python dependencies are already pre-installed in the image.
+1. [Create a Modal account](https://modal.com/signup) and install the CLI:
 
 ```bash
-cd /workspace
+pip install modal
+modal setup
+```
+
+2. Launch an interactive GPU shell. Final leaderboard submissions must run in under 10 minutes on 8xH100s (specifically the SXM variant), but we strongly recommend testing and running experiments on cheaper SKUs first, since an 8xH100 box can cost around $20/hour. Start with a single H100:
+
+```bash
+modal shell --gpu h100
+```
+
+Clone the repo and install dependencies:
+
+```bash
 git clone https://github.com/openai/parameter-golf.git
 cd parameter-golf
+pip install -r requirements.txt
 ```
 
 Download our cached version of FineWeb. We'll use the 1024-token vocabulary for now.
@@ -162,7 +169,7 @@ By default, this command prints `train_loss` step logs during training and print
 
 For dataset export, tokenizer export, and docs-cache rebuild instructions, see [data/README.md](data/README.md).
 
-Evaluation will be in the RunPod environment with all packages installed. `requirements.txt` is provided as a reference if you want to self-setup.
+Evaluation will be in the Modal environment with all packages installed. `requirements.txt` is provided as a reference if you want to self-setup.
 
 ## FAQ
 
