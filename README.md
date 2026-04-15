@@ -120,9 +120,9 @@ Validation always runs on the full `fineweb_val_*` split, which is the fixed fir
 
 Once you're happy with your local tests, or you want more compute, switch to a remote CUDA machine.
 
-You can rent GPUs from anywhere. We recommend [Modal](https://modal.com), a serverless cloud compute platform. We've included a `modal_run.py` script to make this straightforward.
+You can rent GPUs from anywhere. We recommend [Modal](https://modal.com), which lets you launch an interactive GPU shell with minimal setup.
 
-#### Setting Up Modal
+#### Launching a 1xH100 Shell
 
 1. [Create a Modal account](https://modal.com/signup) and install the CLI:
 
@@ -131,37 +131,41 @@ pip install modal
 modal setup
 ```
 
-2. Download the FineWeb dataset to a persistent Modal volume (run once — subsequent training runs reuse the cached data):
+2. Launch an interactive GPU shell. Final leaderboard submissions must run in under 10 minutes on 8xH100s (specifically the SXM variant), but we strongly recommend testing and running experiments on cheaper SKUs first, since an 8xH100 box can cost around $20/hour. Start with a single H100:
 
 ```bash
-modal run modal_run.py::download_data
+modal shell --gpu h100
+```
+
+Clone the repo and install dependencies:
+
+```bash
+git clone https://github.com/openai/parameter-golf.git
+cd parameter-golf
+pip install -r requirements.txt
+```
+
+Download our cached version of FineWeb. We'll use the 1024-token vocabulary for now.
+
+```bash
+python3 data/cached_challenge_fineweb.py --variant sp1024
 ```
 
 This defaults to the full validation split plus 80 training shards (8B tokens). If you only want a smaller subset while iterating, pass `--train-shards N`, for example `--train-shards 1`.
 
-#### Launching a 1xH100 Run
-
-Run training on a single H100 for experimentation:
+Launch your first training run. Note that we're passing `nproc_per_node=1` because we're running on a single H100 GPU in this case.
 
 ```bash
-modal run modal_run.py
+RUN_ID=baseline_sp1024 \
+DATA_PATH=./data/datasets/fineweb10B_sp1024/ \
+TOKENIZER_PATH=./data/tokenizers/fineweb_1024_bpe.model \
+VOCAB_SIZE=1024 \
+torchrun --standalone --nproc_per_node=1 train_gpt.py
 ```
 
-By default, `train_gpt.py` keeps its ~10 minute wallclock cap. If you want a longer run, set `MAX_WALLCLOCK_SECONDS=0` in `modal_run.py`. This command prints `train_loss` step logs during training and prints `val_loss`, `val_bpb`, and compressed model size in the final `final_int8_zlib_roundtrip` lines at the end. If you want periodic validation logs during the run, set `VAL_LOSS_EVERY=200` in the `train_1gpu` function inside `modal_run.py`. For the baseline config, the final `val_bpb` should land around ~1.2 with a compressed model size under 16MB.
+By default, `train_gpt.py` keeps its ~10 minute wallclock cap. If you want a longer run, override it explicitly, for example `MAX_WALLCLOCK_SECONDS=0`.
 
-#### Launching an 8xH100 Run (Leaderboard Submissions)
-
-Final leaderboard submissions must run in under 10 minutes on 8xH100s. Launch with:
-
-```bash
-modal run modal_run.py --gpus 8
-```
-
-You can customize the run ID and dataset variant:
-
-```bash
-modal run modal_run.py --gpus 8 --run-id my_experiment --variant sp1024
-```
+By default, this command prints `train_loss` step logs during training and prints `val_loss`, `val_bpb`, and compressed model size in the final `final_int8_zlib_roundtrip` lines at the end. If you want periodic validation logs during the run, set `VAL_LOSS_EVERY`, for example `VAL_LOSS_EVERY=200`. For the baseline config, the final `val_bpb` should land around ~1.2 with a compressed model size under 16MB.
 
 For dataset export, tokenizer export, and docs-cache rebuild instructions, see [data/README.md](data/README.md).
 
