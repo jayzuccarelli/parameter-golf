@@ -572,9 +572,9 @@ def gptq_mixed_int6(
     calib_batch: int = 4,
 ):
     """GPTQ replacement for mixed_quantize_int6. Uses AR self-generated calibration."""
-    log0(f"gptq: generating {n_seqs}x{seq_len} calibration tokens (temp={temperature})")
+    print(f"gptq: generating {n_seqs}x{seq_len} calibration tokens (temp={temperature})")
     calib = _gptq_generate_calib(model, n_seqs, seq_len, temperature, seed, device)
-    log0("gptq: collecting Hessians...")
+    print("gptq: collecting Hessians...")
 
     hessians: dict[str, Tensor] = {}
     n_samples: dict[str, int] = {}
@@ -612,7 +612,7 @@ def gptq_mixed_int6(
     for h in hooks:
         h.remove()
 
-    log0("gptq: quantizing layers...")
+    print("gptq: quantizing layers...")
     num_layers_total = max(
         (int(k.split(".")[1]) for k in state_dict if k.startswith("blocks.")),
         default=0,
@@ -638,7 +638,7 @@ def gptq_mixed_int6(
             if mod_name is not None and mod_name in hessians and n_samples[mod_name] > 0:
                 W = t.float().to(device)
                 H = hessians[mod_name] * (2.0 / n_samples[mod_name])
-                log0(f"gptq: {name} {list(W.shape)}")
+                print(f"gptq: {name} {list(W.shape)}")
                 q, s = _gptq_quantize_layer(W, H, damp_frac)
                 result[name + ".q"] = q.cpu()
                 result[name + ".scale"] = s.cpu()
