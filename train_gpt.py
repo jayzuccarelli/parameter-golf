@@ -1252,7 +1252,8 @@ def main() -> None:
     log0(f"train_loader:dataset:{dataset_dir.name} train_shards:{actual_train_files}")
     log0(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.numel() - 1}")
 
-    CastedLinear._qat_enabled = args.qat_enabled
+    # Disable QAT when GPTQ is enabled — GPTQ needs clean FP weights to work correctly
+    CastedLinear._qat_enabled = args.qat_enabled and not args.gptq_enabled
 
     base_model = GPT(
         vocab_size=args.vocab_size,
