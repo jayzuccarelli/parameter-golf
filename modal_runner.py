@@ -41,27 +41,47 @@ def run_experiment(code: str) -> str:
            "EVAL_STRIDE": "0",
            "TRAIN_BATCH_TOKENS": "131072",
            "GPTQ_ENABLED": "0"}
-    r = subprocess.run([sys.executable, tmp.name], capture_output=True, text=True, env=env, timeout=2400)
-    return r.stdout + r.stderr
+    proc = subprocess.Popen(
+        [sys.executable, tmp.name],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, env=env
+    )
+    output = []
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        output.append(line)
+    proc.wait()
+    return "".join(output)
 
-@app.function(image=image, gpu="H100:8", volumes={"/data": vol}, timeout=7200, memory=65536)
+@app.function(image=image, gpu="H100:8", volumes={"/data": vol}, timeout=1800, memory=65536)
 def run_experiment_h100(code: str) -> str:
+    import shutil
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
     tmp.write(code); tmp.flush()
     env = {**os.environ,
            "DATA_PATH": "/data/datasets/fineweb10B_sp1024",
            "TOKENIZER_PATH": "/data/tokenizers/fineweb_1024_bpe.model",
            "ZSTD_LEVEL": "9",
-           "MAX_WALLCLOCK_SECONDS": "0",
+           "MAX_WALLCLOCK_SECONDS": "600",
            "TRAIN_BATCH_TOKENS": "524288",
            "EVAL_STRIDE": "256",
            "GPTQ_ENABLED": "1",
            "BIGRAM_VOCAB_SIZE": "3072",
            "BIGRAM_DIM": "112",
-           "ITERATIONS": "9000",
+           "ITERATIONS": "20000",
            "WARMDOWN_ITERS": "3000"}
-    r = subprocess.run([sys.executable, tmp.name], capture_output=True, text=True, env=env, timeout=7200)
-    return r.stdout + r.stderr
+    torchrun = shutil.which("torchrun") or f"{sys.exec_prefix}/bin/torchrun"
+    proc = subprocess.Popen(
+        [torchrun, "--nproc_per_node=8", "--standalone", tmp.name],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, env=env
+    )
+    output = []
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        output.append(line)
+    proc.wait()
+    return "".join(output)
 
 @app.local_entrypoint()
 def run(script: str = "train_gpt.py"):
