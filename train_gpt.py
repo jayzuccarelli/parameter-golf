@@ -1076,7 +1076,7 @@ def main() -> None:
     log0(f"train_loader:dataset:{dataset_dir.name} train_shards:{actual_train_files}")
     log0(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.numel() - 1}")
 
-    CastedLinear._qat_enabled = False  # late QAT: enabled during warmdown when scale < late_qat_threshold
+    CastedLinear._qat_enabled = args.qat_enabled
 
     base_model = GPT(
         vocab_size=args.vocab_size,
@@ -1250,9 +1250,6 @@ def main() -> None:
 
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         scale = lr_mul(step, elapsed_ms)
-        if args.qat_enabled and not CastedLinear._qat_enabled and scale < args.late_qat_threshold:
-            CastedLinear._qat_enabled = True
-            log0(f"qat:enabled step:{step} scale:{scale:.4f}")
         zero_grad_all()
         train_loss = torch.zeros((), device=device)
         for micro_step in range(grad_accum_steps):
