@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import uuid
+import lzma
 import zlib
 from pathlib import Path
 
@@ -93,7 +94,7 @@ class Hyperparameters:
     swa_enabled = bool(int(os.environ.get("SWA_ENABLED", "0")))  # off: EMA is better
     swa_every = int(os.environ.get("SWA_EVERY", 200))
     qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "1")))  # STE int6 QAT on
-    xsa_last_n = int(os.environ.get("XSA_LAST_N", 4))            # XSA on last 4 layers
+    xsa_last_n = int(os.environ.get("XSA_LAST_N", 11))           # XSA on all layers
     ema_enabled = bool(int(os.environ.get("EMA_ENABLED", "1")))  # EMA on
     ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
     bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 2048))
@@ -736,7 +737,7 @@ class MLP(nn.Module):
         self.proj._zero_init = True
 
     def forward(self, x: Tensor) -> Tensor:
-        x = torch.relu(self.fc(x))
+        x = F.leaky_relu(self.fc(x), negative_slope=0.5)
         return self.proj(x.square())
 
 
@@ -1335,22 +1336,21 @@ def main() -> None:
     quant_buf = io.BytesIO()
     torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
     quant_raw = quant_buf.getvalue()
-    zstd_level = int(os.environ.get("ZSTD_LEVEL", "9"))
-    quant_blob = zstandard.ZstdCompressor(level=zstd_level).compress(quant_raw) if _COMPRESSOR == "zstd" else zlib.compress(quant_raw, 9)
+    quant_blob = lzma.compress(quant_raw, preset=9)
     if master_process:
         with open("final_model.int6.ptz", "wb") as f:
             f.write(quant_blob)
         quant_file_bytes = len(quant_blob)
         code_bytes = len(code.encode("utf-8"))
-        log0(f"Serialized model int6+{_COMPRESSOR}: {quant_file_bytes} bytes")
-        log0(f"Total submission size int6+{_COMPRESSOR}: {quant_file_bytes + code_bytes} bytes")
+        log0(f"Serialized model int6+lzma: {quant_file_bytes} bytes")
+        log0(f"Total submission size int6+lzma: {quant_file_bytes + code_bytes} bytes")
 
     if distributed:
         dist.barrier()
     with open("final_model.int6.ptz", "rb") as f:
         quant_blob_disk = f.read()
     quant_state = torch.load(
-        io.BytesIO(zstandard.ZstdDecompressor().decompress(quant_blob_disk) if _COMPRESSOR == "zstd" else zlib.decompress(quant_blob_disk)),
+        io.BytesIO(lzma.decompress(quant_blob_disk)),
         map_location="cpu",
     )
     deq_state = dequantize_mixed_int6(quant_state["w"], quant_state["m"], sd_cpu)
