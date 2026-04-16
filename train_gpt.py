@@ -98,8 +98,8 @@ class Hyperparameters:
     xsa_last_n = int(os.environ.get("XSA_LAST_N", 11))           # XSA on all layers
     ema_enabled = bool(int(os.environ.get("EMA_ENABLED", "1")))  # EMA on
     ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
-    bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 3072))
-    bigram_dim = int(os.environ.get("BIGRAM_DIM", 112))
+    bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 2048))
+    bigram_dim = int(os.environ.get("BIGRAM_DIM", 128))
     rope_partial_dim = int(os.environ.get("ROPE_PARTIAL_DIM", 0))  # 0 = full RoPE (partial RoPE hurt on proxy)
 
 
