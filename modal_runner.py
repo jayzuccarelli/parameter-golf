@@ -38,7 +38,8 @@ def run_experiment(code: str) -> str:
            "DATA_PATH": "/data/datasets/fineweb10B_sp1024",
            "TOKENIZER_PATH": "/data/tokenizers/fineweb_1024_bpe.model",
            "ZSTD_LEVEL": "9",
-           "EVAL_STRIDE": "256"}
+           "EVAL_STRIDE": "0",
+           "TRAIN_BATCH_TOKENS": "131072"}
     r = subprocess.run([sys.executable, tmp.name], capture_output=True, text=True, env=env, timeout=2400)
     return r.stdout + r.stderr
 
