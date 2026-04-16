@@ -98,9 +98,9 @@ class Hyperparameters:
     xsa_last_n = int(os.environ.get("XSA_LAST_N", 11))           # XSA on all layers
     ema_enabled = bool(int(os.environ.get("EMA_ENABLED", "1")))  # EMA on
     ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
-    bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 2048))
-    bigram_dim = int(os.environ.get("BIGRAM_DIM", 128))
-    rope_partial_dim = int(os.environ.get("ROPE_PARTIAL_DIM", 16))  # partial RoPE: rotate only first N dims
+    bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 3072))
+    bigram_dim = int(os.environ.get("BIGRAM_DIM", 112))
+    rope_partial_dim = int(os.environ.get("ROPE_PARTIAL_DIM", 0))  # 0 = full RoPE (partial RoPE hurt on proxy)
 
 
 # -----------------------------
@@ -761,14 +761,16 @@ class Block(nn.Module):
         rope_base: float,
         qk_gain_init: float,
         rope_partial_dim: int = 0,
+        layer_idx: int = 0,
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init, rope_partial_dim)
         self.mlp = MLP(dim, mlp_mult)
-        self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
-        self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
+        ln_scale = 1.0 / math.sqrt(layer_idx + 1)
+        self.attn_scale = nn.Parameter(torch.full((dim,), ln_scale, dtype=torch.float32))
+        self.mlp_scale = nn.Parameter(torch.full((dim,), ln_scale, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
 
     def forward(self, x: Tensor, x0: Tensor) -> Tensor:
@@ -817,8 +819,8 @@ class GPT(nn.Module):
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
         self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
         self.blocks = nn.ModuleList(
-            [Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, rope_partial_dim)
-             for _ in range(num_layers)]
+            [Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, rope_partial_dim, layer_idx=i)
+             for i in range(num_layers)]
         )
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
