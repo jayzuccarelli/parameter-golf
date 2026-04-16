@@ -94,11 +94,13 @@ class Hyperparameters:
     swa_enabled = bool(int(os.environ.get("SWA_ENABLED", "0")))  # off: EMA is better
     swa_every = int(os.environ.get("SWA_EVERY", 200))
     qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "1")))  # STE int6 QAT on
+    late_qat_threshold = float(os.environ.get("LATE_QAT_THRESHOLD", 0.15))  # enable QAT when LR scale < this
     xsa_last_n = int(os.environ.get("XSA_LAST_N", 11))           # XSA on all layers
     ema_enabled = bool(int(os.environ.get("EMA_ENABLED", "1")))  # EMA on
     ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
     bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 2048))
     bigram_dim = int(os.environ.get("BIGRAM_DIM", 128))
+    rope_partial_dim = int(os.environ.get("ROPE_PARTIAL_DIM", 16))  # partial RoPE: rotate only first N dims
 
 
 # -----------------------------
@@ -628,6 +630,12 @@ def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
     return torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
 
 
+def apply_rotary_emb_partial(x: Tensor, cos: Tensor, sin: Tensor, rope_dim: int) -> Tensor:
+    if rope_dim >= x.size(-1):
+        return apply_rotary_emb(x, cos, sin)
+    return torch.cat((apply_rotary_emb(x[..., :rope_dim], cos, sin), x[..., rope_dim:]), dim=-1)
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(
         self,
@@ -636,6 +644,7 @@ class CausalSelfAttention(nn.Module):
         num_kv_heads: int,
         rope_base: float,
         qk_gain_init: float,
+        rope_partial_dim: int = 0,
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -654,7 +663,8 @@ class CausalSelfAttention(nn.Module):
         self.proj = CastedLinear(dim, dim, bias=False)
         self.proj._zero_init = True
         self.q_gain = nn.Parameter(torch.full((num_heads,), qk_gain_init, dtype=torch.float32))
-        self.rotary = Rotary(self.head_dim, base=rope_base, train_seq_len=1024)
+        self.rope_partial_dim = rope_partial_dim if rope_partial_dim > 0 else self.head_dim
+        self.rotary = Rotary(self.rope_partial_dim, base=rope_base, train_seq_len=1024)
         self.use_xsa = False
 
     def _xsa_efficient(self, y: Tensor, v: Tensor) -> Tensor:
@@ -676,8 +686,8 @@ class CausalSelfAttention(nn.Module):
         q = F.rms_norm(q, (q.size(-1),))
         k = F.rms_norm(k, (k.size(-1),))
         cos, sin = self.rotary(seqlen, x.device, q.dtype)
-        q = apply_rotary_emb(q, cos, sin)
-        k = apply_rotary_emb(k, cos, sin)
+        q = apply_rotary_emb_partial(q, cos, sin, self.rope_partial_dim)
+        k = apply_rotary_emb_partial(k, cos, sin, self.rope_partial_dim)
         q = q * self.q_gain.to(dtype=q.dtype)[None, None, :, None]
         # PyTorch SDPA expects [B, H, T, D]; transpose in/out.
         y = F.scaled_dot_product_attention(
@@ -750,11 +760,12 @@ class Block(nn.Module):
         mlp_mult: float,
         rope_base: float,
         qk_gain_init: float,
+        rope_partial_dim: int = 0,
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init)
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init, rope_partial_dim)
         self.mlp = MLP(dim, mlp_mult)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
@@ -788,6 +799,7 @@ class GPT(nn.Module):
         bigram_vocab_size: int = 0,
         bigram_dim: int = 128,
         xsa_last_n: int = 0,
+        rope_partial_dim: int = 0,
     ):
         super().__init__()
         if logit_softcap <= 0.0:
@@ -805,7 +817,7 @@ class GPT(nn.Module):
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
         self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
         self.blocks = nn.ModuleList(
-            [Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
+            [Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, rope_partial_dim)
              for _ in range(num_layers)]
         )
         self.final_norm = RMSNorm()
@@ -1064,7 +1076,7 @@ def main() -> None:
     log0(f"train_loader:dataset:{dataset_dir.name} train_shards:{actual_train_files}")
     log0(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.numel() - 1}")
 
-    CastedLinear._qat_enabled = args.qat_enabled
+    CastedLinear._qat_enabled = False  # late QAT: enabled during warmdown when scale < late_qat_threshold
 
     base_model = GPT(
         vocab_size=args.vocab_size,
@@ -1083,6 +1095,7 @@ def main() -> None:
         bigram_vocab_size=args.bigram_vocab_size,
         bigram_dim=args.bigram_dim,
         xsa_last_n=args.xsa_last_n,
+        rope_partial_dim=args.rope_partial_dim,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -1237,6 +1250,9 @@ def main() -> None:
 
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         scale = lr_mul(step, elapsed_ms)
+        if args.qat_enabled and not CastedLinear._qat_enabled and scale < args.late_qat_threshold:
+            CastedLinear._qat_enabled = True
+            log0(f"qat:enabled step:{step} scale:{scale:.4f}")
         zero_grad_all()
         train_loss = torch.zeros((), device=device)
         for micro_step in range(grad_accum_steps):
@@ -1336,21 +1352,22 @@ def main() -> None:
     quant_buf = io.BytesIO()
     torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
     quant_raw = quant_buf.getvalue()
-    quant_blob = lzma.compress(quant_raw, preset=9)
+    zstd_level = int(os.environ.get("ZSTD_LEVEL", "9"))
+    quant_blob = zstandard.ZstdCompressor(level=zstd_level).compress(quant_raw) if _COMPRESSOR == "zstd" else zlib.compress(quant_raw, 9)
     if master_process:
         with open("final_model.int6.ptz", "wb") as f:
             f.write(quant_blob)
         quant_file_bytes = len(quant_blob)
         code_bytes = len(code.encode("utf-8"))
-        log0(f"Serialized model int6+lzma: {quant_file_bytes} bytes")
-        log0(f"Total submission size int6+lzma: {quant_file_bytes + code_bytes} bytes")
+        log0(f"Serialized model int6+{_COMPRESSOR}: {quant_file_bytes} bytes")
+        log0(f"Total submission size int6+{_COMPRESSOR}: {quant_file_bytes + code_bytes} bytes")
 
     if distributed:
         dist.barrier()
     with open("final_model.int6.ptz", "rb") as f:
         quant_blob_disk = f.read()
     quant_state = torch.load(
-        io.BytesIO(lzma.decompress(quant_blob_disk)),
+        io.BytesIO(zstandard.ZstdDecompressor().decompress(quant_blob_disk) if _COMPRESSOR == "zstd" else zlib.decompress(quant_blob_disk)),
         map_location="cpu",
     )
     deq_state = dequantize_mixed_int6(quant_state["w"], quant_state["m"], sd_cpu)
@@ -1362,7 +1379,7 @@ def main() -> None:
         logit_softcap=args.logit_softcap, rope_base=args.rope_base, qk_gain_init=args.qk_gain_init,
         mtp_num_heads=0, mtp_loss_weight=0.0,
         bigram_vocab_size=args.bigram_vocab_size, bigram_dim=args.bigram_dim,
-        xsa_last_n=args.xsa_last_n,
+        xsa_last_n=args.xsa_last_n, rope_partial_dim=args.rope_partial_dim,
     ).to(device).bfloat16()
     for m in eval_model.modules():
         if isinstance(m, CastedLinear):
